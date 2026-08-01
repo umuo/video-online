@@ -1,0 +1,42 @@
+{
+  "name": "tongying-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "dev:worker": "wrangler dev --config worker/wrangler.jsonc",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check": "tsc -b && eslint src worker/src vite.config.ts",
+    "deploy:worker": "wrangler deploy --config worker/wrangler.jsonc",
+    "deploy:pages": "wrangler pages deploy dist --project-name tongying-room",
+    "deploy": "npm run deploy:worker && npm run build && npm run deploy:pages"
+  },
+  "dependencies": {
+    "dplayer": "https://github.com/tsukumijima/DPlayer/archive/refs/tags/v1.32.7.tar.gz",
+    "hls.js": "^1.6.13",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1",
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^22.19.19",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.4.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vite": "^8.0.13",
+    "wrangler": "^4.118.0"
+  }
+}

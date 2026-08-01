@@ -1,0 +1,35 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "tongying-realtime",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "api.play.lacknb.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "play.lacknb.com/api/*",
+      "zone_name": "lacknb.com"
+    }
+  ],
+  "vars": {
+    "ALLOWED_ORIGIN": "https://play.lacknb.com,https://tongying-room.pages.dev,https://*.tongying-room.pages.dev",
+    "ROOM_EMPTY_TTL_MS": "3600000"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "RoomHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RoomHub"]
+    }
+  ]
+}
