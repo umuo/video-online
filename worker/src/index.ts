@@ -159,6 +159,26 @@ function validMediaUrl(value: unknown): value is string {
   }
 }
 
+const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+
+function safeMediaRedirect(location: string | null, sourceUrl: string) {
+  if (!location) return null;
+  try {
+    const source = new URL(sourceUrl);
+    const target = new URL(location, source);
+    if (
+      !["http:", "https:"].includes(target.protocol)
+      || isPrivateHostname(target.hostname)
+      || target.username
+      || target.password
+      || (source.protocol === "https:" && target.protocol !== "https:")
+    ) return null;
+    return target.toString();
+  } catch {
+    return null;
+  }
+}
+
 function isPrivateHostname(hostname: string) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (
@@ -626,6 +646,7 @@ export default {
       const response = await stub.fetch("https://room.internal/media", {
         method: request.method,
         headers,
+        redirect: "manual",
       });
       return withCors(response, request, env);
     }
@@ -811,9 +832,22 @@ export class RoomHub implements DurableObject {
         upstream = await fetch(room.webdavSource.url, {
           method: request.method === "HEAD" ? "HEAD" : "GET",
           headers,
+          redirect: "manual",
         });
       } catch {
         return json({ message: "WebDAV 视频暂时无法读取" }, 502);
+      }
+      if (redirectStatuses.has(upstream.status)) {
+        const location = safeMediaRedirect(upstream.headers.get("Location"), room.webdavSource.url);
+        if (!location) return json({ message: "WebDAV 返回了不安全或无效的媒体跳转地址" }, 502);
+        return new Response(null, {
+          status: upstream.status,
+          headers: {
+            Location: location,
+            "Cache-Control": "private, no-store",
+            "Referrer-Policy": "no-referrer",
+          },
+        });
       }
       const responseHeaders = new Headers(upstream.headers);
       responseHeaders.delete("Set-Cookie");

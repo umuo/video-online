@@ -38,6 +38,7 @@ import {
 import { Wordmark } from "../App";
 import { API_BASE, getRoomPreview, getRoomSocketUrl } from "../lib/api";
 import { castWithGoogle, castWithNativePicker, prepareGoogleCast } from "../lib/cast";
+import { resolveNickname } from "../lib/nickname";
 import type {
   ClientMessage,
   Member,
@@ -166,8 +167,8 @@ function JoinGate({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim()) return;
-    const cleanName = name.trim().slice(0, 16);
+    const cleanName = resolveNickname(name);
+    setName(cleanName);
     localStorage.setItem("tongying:nickname", cleanName);
     onJoin({
       name: cleanName,
@@ -209,10 +210,9 @@ function JoinGate({
               autoFocus
               type="text"
               maxLength={16}
-              placeholder="输入昵称"
+              placeholder="留空将随机生成"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              required
             />
           </label>
           {preview.passwordRequired && (

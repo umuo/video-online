@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { browseWebDav, createRoom, normalizeRoomCode } from "./lib/api";
+import { resolveNickname } from "./lib/nickname";
 import { loadWebDavProfiles, saveWebDavProfiles } from "./lib/webdavProfiles";
 import type { WebDavProfile } from "./lib/webdavProfiles";
 import type {
@@ -43,7 +44,7 @@ function navigate(path: string) {
 }
 
 function enterCreatedRoom(response: CreateRoomResponse, nickname: string) {
-  const cleanNickname = nickname.trim();
+  const cleanNickname = resolveNickname(nickname);
   localStorage.setItem("tongying:nickname", cleanNickname);
   localStorage.setItem(`tongying:host:${response.room.id}`, response.hostToken);
   sessionStorage.setItem(`tongying:auto:${response.room.id}`, "1");
@@ -239,10 +240,6 @@ function WebDavBrowser({
   }
 
   async function createFromFile(item: WebDavItem) {
-    if (!nickname.trim()) {
-      setError("请先关闭窗口，在首页填写房主昵称");
-      return;
-    }
     setCreatingPath(item.path);
     setError("");
     try {
@@ -505,10 +502,6 @@ function Landing() {
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
     setError("");
-    if (!nickname.trim()) {
-      setError("先给自己起个名字吧");
-      return;
-    }
     if (!sourceUrl.trim()) {
       setError("请填写视频或直播地址");
       return;
@@ -639,14 +632,13 @@ function Landing() {
                 />
               </label>
               <label className="field">
-                <span>你的昵称 <b>必填</b></span>
+                <span>你的昵称 <em>选填</em></span>
                 <input
                   type="text"
                   maxLength={16}
-                  placeholder="房主昵称"
+                  placeholder="留空将随机生成"
                   value={nickname}
                   onChange={(event) => setNickname(event.target.value)}
-                  required
                 />
               </label>
             </div>

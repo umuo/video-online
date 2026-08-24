@@ -50,7 +50,7 @@
 
 Durable Object 只保存房间信息、密码摘要、房主令牌摘要和最新播放状态。房间解散时会删除这些数据。弹幕不会写入 Durable Object Storage。
 
-WebDAV 目录通过标准的 `PROPFIND Depth: 1` 读取。目录内容在 Worker 中排序、分页后返回，WebDAV 密码不会出现在资源列表或房间状态里。用 WebDAV 视频建房时，该房间的 Durable Object 会暂存上游地址和认证头，并通过房间媒体地址转发 `GET`、`HEAD` 与 HTTP Range 请求；最后一人离开且房间到期后，这些信息会随房间数据一起删除。
+WebDAV 目录通过标准的 `PROPFIND Depth: 1` 读取。目录内容在 Worker 中排序、分页后返回，WebDAV 密码不会出现在资源列表或房间状态里。用 WebDAV 视频建房时，该房间的 Durable Object 会暂存上游地址和认证头，并通过房间媒体地址处理 `GET`、`HEAD` 与 HTTP Range 请求。对于 AList、对象存储等返回带时效下载地址的服务，Worker 会把经过安全校验的 HTTP(S) 重定向交给播放器直接访问，避免 Cloudflare 出口被网盘 CDN 拒绝；不提供重定向的 WebDAV 服务仍由 Worker 流式转发。最后一人离开且房间到期后，这些信息会随房间数据一起删除。
 
 浏览器会把多个 WebDAV 配置合并加密后写入 `localStorage`，不可导出的 AES-GCM 设备密钥保存在 IndexedDB。发送凭据时，浏览器生成一次性 AES-GCM 密钥加密账号密码，再使用 Worker 公布的 RSA-OAEP 公钥封装该密钥；请求 JSON 只包含 `encryptedKey`、`iv` 和 `ciphertext`。密文通过 AES-GCM Additional Authenticated Data 与对应 WebDAV 地址绑定，不能改配到其他地址重放。RSA 私钥由一个专用 Durable Object 自动生成并持久化，不需要手工配置部署密钥。
 
@@ -255,7 +255,7 @@ curl -i https://play.example.com/api/rooms/ABCDEF
 - HTTPS WebDAV 必须使用 Worker 能验证的公开 CA 证书；自签名证书会在服务端连接阶段失败。
 - 一键建房支持 WebDAV 返回 `video/*` MIME 类型，或扩展名为 MP4、WebM、MOV、M4V、MKV、AVI、MPEG、TS 等的视频文件。
 - WebDAV 服务应支持 `HEAD`、`GET` 和 Range 请求，否则可能无法获取时长或拖动进度。
-- WebDAV 媒体经 Worker 转发会产生 Worker 流量；大规模公开放映建议使用带签名 URL 的对象存储或 CDN。
+- WebDAV 媒体若由上游返回签名直链，会由播放器直接访问；只有不提供重定向的服务才会持续产生 Worker 转发流量。
 
 ## 常见问题
 
