@@ -36,7 +36,7 @@ import {
   useState,
 } from "react";
 import { Wordmark } from "../App";
-import { getRoomPreview, getRoomSocketUrl } from "../lib/api";
+import { API_BASE, getRoomPreview, getRoomSocketUrl } from "../lib/api";
 import { castWithGoogle, castWithNativePicker, prepareGoogleCast } from "../lib/cast";
 import type {
   ClientMessage,
@@ -131,7 +131,11 @@ function expectedPosition(room: RoomState) {
 
 function localizeRoomClock(room: RoomState): RoomState {
   // Worker 已把 position 推进到消息发送时刻；收到后换成本机时钟，避免两台设备系统时间不同而反复跳转。
-  return { ...room, updatedAt: Date.now() };
+  return {
+    ...room,
+    sourceUrl: new URL(room.sourceUrl, `${API_BASE}/`).toString(),
+    updatedAt: Date.now(),
+  };
 }
 
 function avatarColor(id: string) {

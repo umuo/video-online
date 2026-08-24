@@ -12,6 +12,10 @@
 
 - 6 位房间号，支持公开房间和密码房间
 - 视频与直播两种模式，支持浏览器可播放的 MP4、WebM、HLS（`.m3u8`）等格式
+- 连接支持 Basic Auth / 应用密码的 WebDAV，按文件夹分页浏览资源
+- WebDAV 视频文件支持一键创建房间，文件名可自动作为放映标题
+- 支持保存、切换和删除多个 WebDAV 配置；本地配置使用设备密钥加密
+- WebDAV 账号密码在 HTTPS 之外再使用 AES-GCM + RSA-OAEP 封装传输
 - 房主控制播放、暂停、快进和倍速
 - 普通观众默认只在进入或刷新时同步一次进度，可自行开启持续进度跟随
 - 实时在线成员列表与断线重连
@@ -31,16 +35,28 @@
   ├─ /、/room/* ─────── Cloudflare Pages（React 静态前端）
   │
   └─ /api/* ─────────── Cloudflare Worker
+                              ├─ WebDAV PROPFIND 目录浏览
+                              ├─ WebDAV 媒体 Range 请求转发
                               │
                               └─ Durable Object（每个房间一个实例）
                                    ├─ 房间与播放状态
                                    ├─ WebSocket 在线连接
+                                   ├─ 房间期内的 WebDAV 上游凭据
+                                   ├─ WebDAV 传输加密 RSA 密钥库
                                    └─ 1 小时空房清理闹钟
 ```
 
 生产环境通过 `play.lacknb.com/api/*` 同源路由访问 Worker，避免移动网络访问独立 `workers.dev` 域名时出现 DNS、TLS 或跨域问题。
 
 Durable Object 只保存房间信息、密码摘要、房主令牌摘要和最新播放状态。房间解散时会删除这些数据。弹幕不会写入 Durable Object Storage。
+
+WebDAV 目录通过标准的 `PROPFIND Depth: 1` 读取。目录内容在 Worker 中排序、分页后返回，WebDAV 密码不会出现在资源列表或房间状态里。用 WebDAV 视频建房时，该房间的 Durable Object 会暂存上游地址和认证头，并通过房间媒体地址转发 `GET`、`HEAD` 与 HTTP Range 请求；最后一人离开且房间到期后，这些信息会随房间数据一起删除。
+
+浏览器会把多个 WebDAV 配置合并加密后写入 `localStorage`，不可导出的 AES-GCM 设备密钥保存在 IndexedDB。发送凭据时，浏览器生成一次性 AES-GCM 密钥加密账号密码，再使用 Worker 公布的 RSA-OAEP 公钥封装该密钥；请求 JSON 只包含 `encryptedKey`、`iv` 和 `ciphertext`。密文通过 AES-GCM Additional Authenticated Data 与对应 WebDAV 地址绑定，不能改配到其他地址重放。RSA 私钥由一个专用 Durable Object 自动生成并持久化，不需要手工配置部署密钥。
+
+应用层加密用于减少请求日志、调试工具和普通本地存储泄漏明文的风险，但不能替代 HTTPS。生产环境仍必须使用 HTTPS 来验证服务器身份、保护完整请求并抵御中间人攻击；同源脚本若已经获得页面执行权限，仍可能访问用户在页面中解密后的配置。
+
+> WebDAV 服务必须能从公网访问并支持 HTTP(S)。出于安全考虑，本机地址、私有网段和 `.local` 地址不会被代理。建议使用服务商提供的应用密码，不要使用主账号密码。
 
 ## 目录结构
 
@@ -89,7 +105,7 @@ Worker 默认运行在 `http://localhost:8787`，本地 Durable Object 数据保
 npm run dev
 ```
 
-Vite 默认运行在 `http://localhost:5173`。本地页面会自动连接 `http://localhost:8787`，通常不需要创建 `.env` 文件。
+Vite 默认运行在 `http://localhost:5173`。页面请求同源的 `/api/*`，Vite 会把 HTTP 和 WebSocket 请求代理到 `http://localhost:8787`，因此本地开发不依赖浏览器跨域配置，通常也不需要创建 `.env` 文件。
 
 如果端口被占用，请以终端输出的实际地址为准。
 
@@ -109,7 +125,7 @@ npm run preview
 
 | 变量 | 使用位置 | 说明 |
 | --- | --- | --- |
-| `VITE_REALTIME_URL` | Vite 构建 | 可选。覆盖前端实时服务地址；本地开发通常不需要 |
+| `VITE_REALTIME_URL` | Vite 构建 | 可选。仅在前端和 Worker 不同源部署时覆盖实时服务地址；本地开发通常不需要 |
 | `ALLOWED_ORIGIN` | Worker | 允许访问 API 和 WebSocket 的网页来源，多个值使用英文逗号分隔 |
 | `ROOM_EMPTY_TTL_MS` | Worker | 空房自动解散时间，默认 `3600000` 毫秒，即 1 小时 |
 
@@ -233,6 +249,14 @@ curl -i https://play.example.com/api/rooms/ABCDEF
 - Chromecast 必须能从公网直接访问媒体地址；依赖登录 Cookie 或仅限局域网的地址通常无法投屏。
 - 请确保分享和播放的内容拥有合法授权。
 
+### WebDAV 要求
+
+- 当前认证方式为 HTTP Basic Auth，兼容常见的应用密码；需要 Digest、OAuth 或网页登录 Cookie 的服务暂不支持。
+- HTTPS WebDAV 必须使用 Worker 能验证的公开 CA 证书；自签名证书会在服务端连接阶段失败。
+- 一键建房支持 WebDAV 返回 `video/*` MIME 类型，或扩展名为 MP4、WebM、MOV、M4V、MKV、AVI、MPEG、TS 等的视频文件。
+- WebDAV 服务应支持 `HEAD`、`GET` 和 Range 请求，否则可能无法获取时长或拖动进度。
+- WebDAV 媒体经 Worker 转发会产生 Worker 流量；大规模公开放映建议使用带签名 URL 的对象存储或 CDN。
+
 ## 常见问题
 
 ### 一直显示“正在寻找放映室”
@@ -255,6 +279,9 @@ curl -i https://play.example.com/api/rooms/ABCDEF
 
 - 房间密码只保存 SHA-256 摘要，不保存明文。
 - 房主令牌只保存在房主浏览器中，分享链接不会携带房主身份。
+- WebDAV 凭据仅在浏览请求中使用；建房后暂存在对应 Durable Object 中，不返回前端观众，并在房间自动解散时删除。
+- 已保存的 WebDAV 配置在 `localStorage` 中是 AES-GCM 密文，密钥作为不可导出的 `CryptoKey` 保存在 IndexedDB；清理任一站点存储都可能使配置无法恢复。
 - 服务端不代理或存储视频文件，播放流量由观众设备直接访问媒体源。
+- 例外：通过 WebDAV 创建的房间会流式转发所选视频，但不会把视频内容写入持久化存储。
 - 房间解散后，Durable Object 会清除该房间的持久化数据。
 - 该项目没有用户账号系统，适合轻量、临时的私人放映场景。

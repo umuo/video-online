@@ -19,6 +19,41 @@ interface RoomRecord {
   createdAt: number;
   passwordHash: string | null;
   hostTokenHash: string;
+  webdavSource?: WebDavUpstream;
+}
+
+interface WebDavUpstream {
+  url: string;
+  authorization?: string;
+}
+
+interface WebDavInput {
+  baseUrl: string;
+  username: string;
+  password: string;
+  path: string;
+  contentType: string;
+}
+
+interface EncryptedWebDavCredentials {
+  encryptedKey: string;
+  iv: string;
+  ciphertext: string;
+}
+
+interface StoredCredentialKeys {
+  publicJwk: JsonWebKey;
+  privateJwk: JsonWebKey;
+}
+
+interface WebDavEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  isVideo: boolean;
+  size: number | null;
+  modifiedAt: string | null;
+  contentType: string;
 }
 
 interface SessionAttachment {
@@ -53,6 +88,7 @@ interface DanmakuMessage {
 
 const jsonHeaders = { "Content-Type": "application/json; charset=utf-8" };
 const roomAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const credentialVaultName = "__TONGYING_WEBDAV_CREDENTIALS_V1__";
 
 function json(data: unknown, status = 200, headers: HeadersInit = {}) {
   return new Response(JSON.stringify(data), {
@@ -123,6 +159,286 @@ function validMediaUrl(value: unknown): value is string {
   }
 }
 
+function isPrivateHostname(hostname: string) {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (
+    normalized === "localhost"
+    || normalized === "::1"
+    || normalized.endsWith(".localhost")
+    || normalized.endsWith(".local")
+  ) return true;
+
+  const parts = normalized.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:");
+  }
+  return parts[0] === 10
+    || parts[0] === 127
+    || (parts[0] === 169 && parts[1] === 254)
+    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+    || (parts[0] === 192 && parts[1] === 168);
+}
+
+function normalizeWebDavBase(value: unknown) {
+  if (typeof value !== "string" || value.length > 2048) throw new Error("请填写有效的 WebDAV 地址");
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || isPrivateHostname(url.hostname)) {
+    throw new Error("WebDAV 必须是可公网访问的 HTTP(S) 地址");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("请将账号密码单独填写，WebDAV 地址不能包含凭据、查询参数或锚点");
+  }
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+  return url;
+}
+
+function normalizeWebDavPath(value: unknown, directory = false) {
+  if (typeof value !== "string" || value.length > 2048 || value.includes("\0")) {
+    throw new Error("WebDAV 路径无效");
+  }
+  const segments = value.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("WebDAV 路径不能包含相对路径");
+  }
+  const path = `/${segments.join("/")}`;
+  return directory && path !== "/" ? `${path}/` : path;
+}
+
+function webDavUrl(baseUrl: URL, path: string, directory = false) {
+  const normalized = normalizeWebDavPath(path, directory);
+  const encoded = normalized.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const result = new URL(baseUrl.toString());
+  result.pathname = `${baseUrl.pathname}${encoded.replace(/^\//, "")}`;
+  return result;
+}
+
+function basicAuthorization(username: string, password: string) {
+  if (!username && !password) return undefined;
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `Basic ${btoa(binary)}`;
+}
+
+function base64Bytes(value: unknown, maxBytes: number) {
+  if (typeof value !== "string" || value.length > maxBytes * 2 || !/^[a-z0-9+/]*={0,2}$/i.test(value)) {
+    throw new Error("加密凭据格式无效");
+  }
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch {
+    throw new Error("加密凭据格式无效");
+  }
+  if (binary.length > maxBytes) throw new Error("加密凭据过长");
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function decryptWebDavInput(value: unknown, env: Env) {
+  if (!value || typeof value !== "object") return value;
+  const input = value as Record<string, unknown>;
+  if (!input.credentials) return input;
+  const response = await env.ROOMS.getByName(credentialVaultName).fetch("https://room.internal/decrypt-credentials", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      ...(input.credentials as Record<string, unknown>),
+      context: typeof input.baseUrl === "string" ? input.baseUrl : "",
+    }),
+  });
+  const body = await response.json().catch(() => null) as { username?: unknown; password?: unknown; message?: string } | null;
+  if (!response.ok || typeof body?.username !== "string" || typeof body.password !== "string") {
+    throw new Error(body?.message || "WebDAV 凭据解密失败，请刷新页面后重试");
+  }
+  const { credentials: _credentials, ...rest } = input;
+  void _credentials;
+  return { ...rest, username: body.username, password: body.password };
+}
+
+function parseWebDavInput(value: unknown, directory = false): WebDavInput {
+  if (!value || typeof value !== "object") throw new Error("WebDAV 配置不完整");
+  const input = value as Record<string, unknown>;
+  const baseUrl = normalizeWebDavBase(input.baseUrl).toString();
+  const username = typeof input.username === "string" ? input.username : "";
+  const password = typeof input.password === "string" ? input.password : "";
+  if (username.length > 256 || password.length > 1024) throw new Error("WebDAV 账号或密码过长");
+  return {
+    baseUrl,
+    username,
+    password,
+    path: normalizeWebDavPath(typeof input.path === "string" ? input.path : "/", directory),
+    contentType: typeof input.contentType === "string" ? input.contentType.slice(0, 256) : "",
+  };
+}
+
+function decodeXml(value: string) {
+  return value
+    .replace(/&#(\d+);/g, (entity, code: string) => {
+      const point = Number(code);
+      return Number.isInteger(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (entity, code: string) => {
+      const point = Number.parseInt(code, 16);
+      return Number.isInteger(point) && point >= 0 && point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+    })
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function xmlValue(block: string, tag: string) {
+  const match = block.match(new RegExp(`<(?:[\\w-]+:)?${tag}\\b[^>]*>([\\s\\S]*?)<\\/(?:[\\w-]+:)?${tag}>`, "i"));
+  return match ? decodeXml(match[1].replace(/<[^>]+>/g, "").trim()) : "";
+}
+
+function decodedPathname(pathname: string) {
+  return `/${pathname.split("/").filter(Boolean).map((segment) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  }).join("/")}`;
+}
+
+const videoExtensions = new Set([
+  "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "mts", "ogv", "ts", "webm", "wmv",
+]);
+
+function isVideoResource(path: string, contentType: string) {
+  const extension = path.match(/\.([^./]+)$/)?.[1]?.toLowerCase() || "";
+  return contentType.toLowerCase().startsWith("video/") || videoExtensions.has(extension);
+}
+
+function parseWebDavEntries(xml: string, baseUrl: URL, requestedPath: string) {
+  const basePath = decodedPathname(baseUrl.pathname);
+  const requested = normalizeWebDavPath(requestedPath, true);
+  const responses = xml.match(/<(?:[\w-]+:)?response\b[^>]*>[\s\S]*?<\/(?:[\w-]+:)?response>/gi) || [];
+  const entries: WebDavEntry[] = [];
+
+  for (const response of responses) {
+    const hrefValue = xmlValue(response, "href");
+    if (!hrefValue) continue;
+    let href: URL;
+    try {
+      href = new URL(hrefValue, baseUrl);
+    } catch {
+      continue;
+    }
+    if (href.origin !== baseUrl.origin) continue;
+    const decodedHref = decodedPathname(href.pathname);
+    const normalizedBase = basePath === "/" ? "/" : `${basePath.replace(/\/$/, "")}/`;
+    if (!decodedHref.startsWith(normalizedBase)) continue;
+    const relative = normalizeWebDavPath(decodedHref.slice(normalizedBase.length - 1));
+    const isDirectory = /<(?:[\w-]+:)?collection\b/i.test(response);
+    const path = normalizeWebDavPath(relative, isDirectory);
+    if (normalizeWebDavPath(path, true) === requested) continue;
+    if (!path.startsWith(requested)) continue;
+    const childPath = path.slice(requested.length).replace(/\/$/, "");
+    if (!childPath || childPath.includes("/")) continue;
+
+    const fallbackName = path.split("/").filter(Boolean).at(-1) || "未命名资源";
+    const sizeText = xmlValue(response, "getcontentlength");
+    const rawSize = Number(sizeText);
+    const modified = xmlValue(response, "getlastmodified");
+    const contentType = xmlValue(response, "getcontenttype");
+    entries.push({
+      name: xmlValue(response, "displayname") || fallbackName,
+      path,
+      isDirectory,
+      isVideo: !isDirectory && isVideoResource(path, contentType),
+      size: !isDirectory && sizeText !== "" && Number.isFinite(rawSize) && rawSize >= 0 ? rawSize : null,
+      modifiedAt: modified && !Number.isNaN(Date.parse(modified)) ? new Date(modified).toISOString() : null,
+      contentType,
+    });
+  }
+
+  return entries.sort((left, right) => {
+    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+    return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
+  });
+}
+
+async function browseWebDav(request: Request, env: Env) {
+  const encryptedBody = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+  let body: Record<string, unknown> | null;
+  let input: WebDavInput;
+  try {
+    body = await decryptWebDavInput(encryptedBody, env) as Record<string, unknown> | null;
+    input = parseWebDavInput(body, true);
+  } catch (caught) {
+    return json({ message: caught instanceof Error ? caught.message : "WebDAV 配置无效" }, 400);
+  }
+
+  const pageValue = Number(body?.page);
+  const pageSizeValue = Number(body?.pageSize);
+  const requestedPage = Number.isInteger(pageValue) && pageValue > 0 ? pageValue : 1;
+  const pageSize = Number.isInteger(pageSizeValue) ? Math.min(50, Math.max(5, pageSizeValue)) : 12;
+  const baseUrl = new URL(input.baseUrl);
+  const headers = new Headers({
+    Depth: "1",
+    "Content-Type": "application/xml; charset=utf-8",
+  });
+  const authorization = basicAuthorization(input.username, input.password);
+  if (authorization) headers.set("Authorization", authorization);
+
+  let response: Response;
+  try {
+    response = await fetch(webDavUrl(baseUrl, input.path, true), {
+      method: "PROPFIND",
+      headers,
+      body: '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getcontenttype/></d:prop></d:propfind>',
+    });
+  } catch {
+    return json({ message: "无法连接 WebDAV 服务，请检查地址和网络" }, 502);
+  }
+
+  if (!response.ok) {
+    const message = response.status === 401 || response.status === 403
+      ? "WebDAV 认证失败，请检查账号和密码"
+      : response.status === 404
+        ? "WebDAV 目录不存在"
+        : response.status === 405
+          ? "该地址不接受 WebDAV PROPFIND，请填写 WebDAV 根目录而不是普通网页地址"
+          : `WebDAV 服务返回了 ${response.status}`;
+    return json({ message }, response.status === 401 || response.status === 403 ? 401 : 502);
+  }
+  const contentLength = Number(response.headers.get("Content-Length"));
+  if (Number.isFinite(contentLength) && contentLength > 5_000_000) {
+    return json({ message: "这个 WebDAV 目录内容过多，请先整理为较小的子目录" }, 413);
+  }
+  const xml = await response.text();
+  if (xml.length > 5_000_000) {
+    return json({ message: "这个 WebDAV 目录内容过多，请先整理为较小的子目录" }, 413);
+  }
+  if (!/<(?:[\w-]+:)?multistatus\b/i.test(xml)) {
+    return json({ message: "上游没有返回有效的 WebDAV 目录，请检查服务地址是否为 WebDAV 根目录" }, 502);
+  }
+  const entries = parseWebDavEntries(xml, baseUrl, input.path);
+  const total = entries.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const start = (page - 1) * pageSize;
+  const path = normalizeWebDavPath(input.path, true);
+  const segments = path.split("/").filter(Boolean);
+  const parentPath = segments.length
+    ? normalizeWebDavPath(`/${segments.slice(0, -1).join("/")}`, true)
+    : null;
+  return json({
+    path,
+    parentPath,
+    items: entries.slice(start, start + pageSize),
+    page,
+    pageSize,
+    total,
+    totalPages,
+  });
+}
+
 function corsHeaders(request: Request, env: Env) {
   const origin = request.headers.get("Origin") || "";
   const allowedOrigins = configuredOrigins(env);
@@ -132,7 +448,8 @@ function corsHeaders(request: Request, env: Env) {
   return {
     "Access-Control-Allow-Origin": responseOrigin,
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+    "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range, Content-Type, ETag, Last-Modified",
     Vary: "Origin",
   };
 }
@@ -156,8 +473,9 @@ function matchesAllowedOrigin(origin: string, allowed: string) {
 
 function originAllowed(request: Request, env: Env) {
   const origin = request.headers.get("Origin") || "";
+  const requestUrl = new URL(request.url);
   if (!origin) {
-    const hostname = new URL(request.url).hostname;
+    const hostname = requestUrl.hostname;
     return [
       "play.lacknb.com",
       "api.play.lacknb.com",
@@ -165,6 +483,11 @@ function originAllowed(request: Request, env: Env) {
       "localhost",
       "127.0.0.1",
     ].includes(hostname);
+  }
+  try {
+    if (new URL(origin).origin === requestUrl.origin) return true;
+  } catch {
+    return false;
   }
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
   return configuredOrigins(env).some((allowed) => matchesAllowedOrigin(origin, allowed));
@@ -192,23 +515,59 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request, env) });
     }
 
+    if (request.method === "GET" && url.pathname === "/api/webdav/key") {
+      const response = await env.ROOMS.getByName(credentialVaultName).fetch("https://room.internal/credential-key");
+      return withCors(response, request, env);
+    }
+
+    if (url.pathname === "/api/webdav/key") {
+      return withCors(json({ message: "WebDAV 公钥接口只支持 GET 请求" }, 405, { Allow: "GET, OPTIONS" }), request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/webdav/files") {
+      return withCors(await browseWebDav(request, env), request, env);
+    }
+
+    if (url.pathname === "/api/webdav/files") {
+      return withCors(json({ message: "WebDAV 资源浏览接口只支持 POST 请求" }, 405, { Allow: "POST, OPTIONS" }), request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/api/rooms") {
       const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-      if (!body || !validMediaUrl(body.sourceUrl)) {
+      const hasDirectSource = body && validMediaUrl(body.sourceUrl);
+      let webdavInput: WebDavInput | null = null;
+      if (body?.webdav) {
+        try {
+          webdavInput = parseWebDavInput(await decryptWebDavInput(body.webdav, env));
+        } catch (caught) {
+          return withCors(json({ message: caught instanceof Error ? caught.message : "WebDAV 配置无效" }, 400), request, env);
+        }
+        if (!isVideoResource(webdavInput.path, webdavInput.contentType)) {
+          return withCors(json({ message: "请选择 WebDAV 中的视频文件" }, 400), request, env);
+        }
+      }
+      if (!body || (!hasDirectSource && !webdavInput)) {
         return withCors(json({ message: "请填写有效的 HTTP(S) 视频地址" }, 400), request, env);
       }
 
-      const sourceType: SourceType = body.sourceType === "live" ? "live" : "video";
+      const sourceType: SourceType = webdavInput ? "video" : body.sourceType === "live" ? "live" : "video";
       const title = typeof body.title === "string" ? body.title.trim().slice(0, 60) : "";
       const password = typeof body.password === "string" ? body.password.trim().slice(0, 64) : "";
 
       for (let attempt = 0; attempt < 4; attempt += 1) {
         const id = roomId();
         const hostToken = randomToken();
+        const selectedName = webdavInput?.path.split("/").filter(Boolean).at(-1) || "video";
+        const sourceUrl = webdavInput
+          ? `/api/rooms/${id}/media/${encodeURIComponent(selectedName)}`
+          : body.sourceUrl as string;
+        const upstreamUrl = webdavInput
+          ? webDavUrl(new URL(webdavInput.baseUrl), webdavInput.path).toString()
+          : null;
         const record: RoomRecord = {
           id,
           title: title || (sourceType === "live" ? "一起看直播" : "今晚的电影"),
-          sourceUrl: body.sourceUrl,
+          sourceUrl,
           sourceType,
           playing: false,
           position: 0,
@@ -217,6 +576,10 @@ export default {
           createdAt: Date.now(),
           passwordHash: password ? await secretHash(id, password) : null,
           hostTokenHash: await secretHash(id, hostToken),
+          webdavSource: upstreamUrl ? {
+            url: upstreamUrl,
+            authorization: basicAuthorization(webdavInput!.username, webdavInput!.password),
+          } : undefined,
         };
 
         const response = await env.ROOMS.getByName(id).fetch("https://room.internal/create", {
@@ -236,7 +599,7 @@ export default {
       return withCors(json({ message: "房间号生成失败，请再试一次" }, 503), request, env);
     }
 
-    const match = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(\/ws)?$/i);
+    const match = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(\/ws|\/media(?:\/[^/]*)?)?$/i);
     if (!match) {
       return withCors(json({ message: "没有找到这个接口" }, 404), request, env);
     }
@@ -249,6 +612,22 @@ export default {
         return withCors(json({ message: "需要 WebSocket 连接" }, 426), request, env);
       }
       return stub.fetch(new Request("https://room.internal/ws", request));
+    }
+
+    if (match[2]?.startsWith("/media")) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return withCors(json({ message: "媒体地址只支持读取" }, 405), request, env);
+      }
+      const headers = new Headers();
+      for (const name of ["Range", "If-Range", "If-None-Match", "If-Modified-Since"]) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      const response = await stub.fetch("https://room.internal/media", {
+        method: request.method,
+        headers,
+      });
+      return withCors(response, request, env);
     }
 
     if (request.method === "GET") {
@@ -264,6 +643,7 @@ export class RoomHub implements DurableObject {
   private readonly state: DurableObjectState;
   private readonly emptyRoomTtlMs: number;
   private room: RoomRecord | null | undefined;
+  private credentialKeyPromise: Promise<{ publicJwk: JsonWebKey; privateKey: CryptoKey }> | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -278,6 +658,72 @@ export class RoomHub implements DurableObject {
       this.room = (await this.state.storage.get<RoomRecord>("room")) ?? null;
     }
     return this.room;
+  }
+
+  private getCredentialKeys() {
+    if (this.credentialKeyPromise) return this.credentialKeyPromise;
+    this.credentialKeyPromise = (async () => {
+      let stored = await this.state.storage.get<StoredCredentialKeys>("webdav-credential-keys:v1");
+      if (!stored) {
+        const pair = await crypto.subtle.generateKey(
+          {
+            name: "RSA-OAEP",
+            modulusLength: 2048,
+            publicExponent: new Uint8Array([1, 0, 1]),
+            hash: "SHA-256",
+          },
+          true,
+          ["encrypt", "decrypt"],
+        ) as CryptoKeyPair;
+        stored = {
+          publicJwk: await crypto.subtle.exportKey("jwk", pair.publicKey) as JsonWebKey,
+          privateJwk: await crypto.subtle.exportKey("jwk", pair.privateKey) as JsonWebKey,
+        };
+        await this.state.storage.put("webdav-credential-keys:v1", stored);
+      }
+      if (!stored) throw new Error("WebDAV 凭据密钥初始化失败");
+      const privateKey = await crypto.subtle.importKey(
+        "jwk",
+        stored.privateJwk,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        false,
+        ["decrypt"],
+      );
+      return { publicJwk: stored.publicJwk, privateKey };
+    })().catch((caught) => {
+      this.credentialKeyPromise = null;
+      throw caught;
+    });
+    return this.credentialKeyPromise;
+  }
+
+  private async decryptCredentials(request: Request) {
+    try {
+      const input = await request.json() as Partial<EncryptedWebDavCredentials>;
+      const encryptedKey = base64Bytes(input.encryptedKey, 512);
+      const iv = base64Bytes(input.iv, 32);
+      const ciphertext = base64Bytes(input.ciphertext, 4096);
+      const context = typeof (input as Record<string, unknown>).context === "string"
+        ? String((input as Record<string, unknown>).context)
+        : "";
+      if (!context || context.length > 2048) throw new Error("加密凭据上下文无效");
+      if (iv.length !== 12) throw new Error("加密凭据的随机向量无效");
+      const { privateKey } = await this.getCredentialKeys();
+      const rawKey = await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, encryptedKey);
+      const aesKey = await crypto.subtle.importKey("raw", rawKey, { name: "AES-GCM" }, false, ["decrypt"]);
+      const plaintext = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(`tongying:webdav:${context}`) },
+        aesKey,
+        ciphertext,
+      );
+      const credentials = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
+      const username = typeof credentials.username === "string" ? credentials.username : "";
+      const password = typeof credentials.password === "string" ? credentials.password : "";
+      if (username.length > 256 || password.length > 1024) throw new Error("WebDAV 账号或密码过长");
+      return json({ username, password });
+    } catch {
+      return json({ message: "WebDAV 凭据解密失败，请刷新页面后重试" }, 400);
+    }
   }
 
   private authenticatedSockets() {
@@ -320,6 +766,15 @@ export class RoomHub implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
 
+    if (path === "/credential-key" && request.method === "GET") {
+      const { publicJwk } = await this.getCredentialKeys();
+      return json({ key: publicJwk }, 200, { "Cache-Control": "public, max-age=3600" });
+    }
+
+    if (path === "/decrypt-credentials" && request.method === "POST") {
+      return this.decryptCredentials(request);
+    }
+
     if (path === "/create" && request.method === "POST") {
       if (await this.getRoom()) return json({ message: "房间号已存在" }, 409);
       const record = (await request.json()) as RoomRecord;
@@ -340,6 +795,33 @@ export class RoomHub implements DurableObject {
         sourceType: room.sourceType,
         passwordRequired: Boolean(room.passwordHash),
         onlineCount: this.members().length,
+      });
+    }
+
+    if (path === "/media") {
+      if (!room.webdavSource) return json({ message: "这个房间没有 WebDAV 媒体" }, 404);
+      const headers = new Headers();
+      for (const name of ["Range", "If-Range", "If-None-Match", "If-Modified-Since"]) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      if (room.webdavSource.authorization) headers.set("Authorization", room.webdavSource.authorization);
+      let upstream: Response;
+      try {
+        upstream = await fetch(room.webdavSource.url, {
+          method: request.method === "HEAD" ? "HEAD" : "GET",
+          headers,
+        });
+      } catch {
+        return json({ message: "WebDAV 视频暂时无法读取" }, 502);
+      }
+      const responseHeaders = new Headers(upstream.headers);
+      responseHeaders.delete("Set-Cookie");
+      responseHeaders.set("Cache-Control", "private, no-store");
+      return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: responseHeaders,
       });
     }
 

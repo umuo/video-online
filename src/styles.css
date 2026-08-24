@@ -30,7 +30,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -44,7 +45,8 @@ a {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--coral);
   outline-offset: 2px;
 }
@@ -536,6 +538,473 @@ input:focus-visible {
   color: #a09a90;
   text-align: center;
   font-size: 9px;
+}
+
+.webdav-open-button {
+  display: flex;
+  width: 100%;
+  min-height: 50px;
+  align-items: center;
+  gap: 10px;
+  margin: -5px 0 17px;
+  padding: 8px 11px;
+  border: 1px dashed #c9c2b7;
+  border-radius: 9px;
+  background: #f5f1e9;
+  color: #5c5851;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s, background .18s;
+}
+
+.webdav-open-button:hover {
+  border-color: #9b9286;
+  background: #f0ebe1;
+}
+
+.webdav-open-button > svg:first-child {
+  color: var(--coral);
+}
+
+.webdav-open-button > svg:last-child {
+  margin-left: auto;
+  color: #aaa398;
+}
+
+.webdav-open-button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.webdav-open-button strong {
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.webdav-open-button small {
+  color: #999288;
+  font-size: 9px;
+}
+
+.webdav-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  overflow-y: auto;
+  padding: 28px;
+  place-items: center;
+  background: rgba(13, 15, 19, .72);
+  backdrop-filter: blur(10px);
+}
+
+.webdav-dialog {
+  width: min(820px, 100%);
+  max-height: min(850px, calc(100vh - 56px));
+  overflow: auto;
+  padding: 25px;
+  border: 1px solid #d2ccc0;
+  border-radius: 17px;
+  background: #fbf9f4;
+  box-shadow: 0 32px 100px rgba(0, 0, 0, .35);
+}
+
+.webdav-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.webdav-title-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  background: #ffe0d8;
+  color: var(--coral);
+}
+
+.webdav-dialog-header p {
+  margin: 0 0 4px;
+  color: #9a9488;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .19em;
+}
+
+.webdav-dialog-header h2 {
+  margin: 0;
+  font-family: "Songti SC", "STSong", Georgia, serif;
+  font-size: 23px;
+}
+
+.webdav-dialog-header > button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  margin-left: auto;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #ddd7cd;
+  border-radius: 8px;
+  background: #fff;
+  color: #777168;
+  cursor: pointer;
+}
+
+.webdav-dialog-header > button:disabled {
+  cursor: wait;
+  opacity: .45;
+}
+
+.webdav-profile-bar {
+  display: grid;
+  grid-template-columns: minmax(170px, .8fr) minmax(170px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #ded8ce;
+  border-radius: 10px;
+  background: #f3efe7;
+}
+
+.webdav-profile-bar label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.webdav-profile-bar label > span {
+  color: #716b62;
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.webdav-profile-bar select,
+.webdav-profile-bar input {
+  width: 100%;
+  height: 39px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid #d5cfc4;
+  border-radius: 7px;
+  outline: 0;
+  background: #fff;
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.webdav-profile-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.webdav-profile-actions button {
+  display: inline-flex;
+  height: 39px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid #d5cfc4;
+  border-radius: 7px;
+  background: #fff;
+  color: #615b53;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.webdav-profile-actions button:not(:first-child) {
+  width: 39px;
+  padding: 0;
+}
+
+.webdav-profile-actions button.danger {
+  color: #c6513b;
+}
+
+.webdav-profile-actions button:disabled {
+  cursor: default;
+  opacity: .4;
+}
+
+.webdav-connection {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(135px, .7fr) minmax(135px, .7fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.webdav-connection .field {
+  min-width: 0;
+  margin: 0;
+}
+
+.webdav-connect-button {
+  display: inline-flex;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.webdav-connect-button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.spin-icon {
+  animation: webdav-spin .8s linear infinite;
+}
+
+@keyframes webdav-spin {
+  to { transform: rotate(360deg); }
+}
+
+.webdav-security-note {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: #f0ece4;
+  color: #8a8379;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.webdav-profile-notice {
+  margin: 9px 2px 0;
+  color: #368268;
+  font-size: 9px;
+}
+
+.webdav-library {
+  margin-top: 17px;
+  overflow: hidden;
+  border: 1px solid #d9d3c8;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.webdav-pathbar {
+  display: flex;
+  height: 45px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border-bottom: 1px solid #e4dfd6;
+  background: #f5f2ec;
+  color: #777168;
+}
+
+.webdav-pathbar button,
+.webdav-enter-button {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #ddd7cd;
+  border-radius: 7px;
+  background: #fff;
+  color: #6f6960;
+  cursor: pointer;
+}
+
+.webdav-pathbar button:disabled,
+.webdav-enter-button:disabled {
+  cursor: default;
+  opacity: .35;
+}
+
+.webdav-pathbar > span {
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.webdav-pathbar > em {
+  margin-left: auto;
+  color: #a29b91;
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.webdav-resource-list {
+  min-height: 160px;
+  transition: opacity .15s;
+}
+
+.webdav-resource-list.is-loading {
+  opacity: .45;
+}
+
+.webdav-resource {
+  display: flex;
+  min-height: 55px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 11px;
+  border-bottom: 1px solid #eeeae3;
+}
+
+.webdav-resource:last-child {
+  border-bottom: 0;
+}
+
+.webdav-resource-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: #f0ede7;
+  color: #a19a90;
+}
+
+.webdav-resource-icon:has(svg[fill="currentColor"]) {
+  background: #fff0c9;
+  color: #d19a22;
+}
+
+.webdav-resource-icon.video {
+  background: #ffe3dc;
+  color: var(--coral);
+}
+
+.webdav-resource-name {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.webdav-resource-name:not(:disabled) {
+  cursor: pointer;
+}
+
+.webdav-resource-name strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.webdav-resource-name small {
+  color: #9e978d;
+  font-size: 9px;
+}
+
+.webdav-create-button {
+  display: inline-flex;
+  min-width: 92px;
+  height: 31px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--coral);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.webdav-create-button:disabled {
+  cursor: wait;
+  opacity: .58;
+}
+
+.webdav-unsupported {
+  min-width: 92px;
+  color: #aaa49a;
+  font-size: 9px;
+  text-align: center;
+}
+
+.webdav-empty {
+  display: flex;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  flex-direction: column;
+  color: #aaa49a;
+  font-size: 10px;
+}
+
+.webdav-pagination {
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 6px 10px;
+  border-top: 1px solid #e4dfd6;
+  background: #f8f6f1;
+}
+
+.webdav-pagination button {
+  display: inline-flex;
+  height: 29px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px;
+  border: 1px solid #ddd7cd;
+  border-radius: 7px;
+  background: #fff;
+  color: #666057;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.webdav-pagination button:disabled {
+  cursor: default;
+  opacity: .4;
+}
+
+.webdav-pagination span {
+  color: #8c857b;
+  font-size: 9px;
+}
+
+.webdav-error {
+  margin: 13px 1px 0;
+  color: #d3472c;
+  font-size: 11px;
 }
 
 .landing-footer {
@@ -2225,6 +2694,23 @@ input:focus-visible {
     display: none;
   }
 
+  .webdav-connection {
+    grid-template-columns: 1fr 1fr auto;
+  }
+
+  .webdav-url-field {
+    grid-column: 1 / -1;
+  }
+
+  .webdav-profile-bar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .webdav-profile-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
   .room-header {
     height: 62px;
   }
@@ -2325,6 +2811,57 @@ input:focus-visible {
   .field-row {
     grid-template-columns: 1fr;
     gap: 0;
+  }
+
+  .webdav-overlay {
+    align-items: end;
+    padding: 0;
+  }
+
+  .webdav-dialog {
+    width: 100%;
+    max-height: calc(100vh - 18px);
+    padding: 20px 14px 15px;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 17px 17px 0 0;
+  }
+
+  .webdav-dialog-header h2 {
+    font-size: 20px;
+  }
+
+  .webdav-connection {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .webdav-profile-bar {
+    padding: 10px;
+  }
+
+  .webdav-url-field,
+  .webdav-connect-button {
+    grid-column: 1 / -1;
+  }
+
+  .webdav-resource {
+    gap: 8px;
+    padding-inline: 9px;
+  }
+
+  .webdav-resource-icon {
+    width: 31px;
+    height: 31px;
+  }
+
+  .webdav-create-button,
+  .webdav-unsupported {
+    min-width: 78px;
+  }
+
+  .webdav-create-button {
+    padding-inline: 7px;
   }
 
   .landing-footer {

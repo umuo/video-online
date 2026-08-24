@@ -29,14 +29,56 @@ export interface Member {
 
 export interface CreateRoomInput {
   title: string;
-  sourceUrl: string;
+  sourceUrl?: string;
   sourceType: SourceType;
   password?: string;
+  webdav?: WebDavSourceInput;
 }
 
 export interface CreateRoomResponse {
   room: RoomState;
   hostToken: string;
+}
+
+export interface WebDavSourceInput {
+  baseUrl: string;
+  username?: string;
+  password?: string;
+  credentials?: EncryptedWebDavCredentials;
+  path: string;
+  contentType?: string;
+}
+
+export interface EncryptedWebDavCredentials {
+  encryptedKey: string;
+  iv: string;
+  ciphertext: string;
+}
+
+export interface WebDavBrowseInput extends Omit<WebDavSourceInput, "path"> {
+  path?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface WebDavItem {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  isVideo: boolean;
+  size: number | null;
+  modifiedAt: string | null;
+  contentType: string;
+}
+
+export interface WebDavBrowseResponse {
+  path: string;
+  parentPath: string | null;
+  items: WebDavItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 export type ServerMessage =
