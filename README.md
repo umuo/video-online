@@ -50,7 +50,7 @@
 
 Durable Object 只保存房间信息、密码摘要、房主令牌摘要和最新播放状态。房间解散时会删除这些数据。弹幕不会写入 Durable Object Storage。
 
-WebDAV 目录通过标准的 `PROPFIND Depth: 1` 读取。目录内容在 Worker 中排序、分页后返回，WebDAV 密码不会出现在资源列表或房间状态里。用 WebDAV 视频建房时，该房间的 Durable Object 会暂存上游地址和认证头，并通过房间媒体地址处理 `GET`、`HEAD` 与 HTTP Range 请求。对于 AList、对象存储等返回带时效下载地址的服务，Worker 会把经过安全校验的 HTTP(S) 重定向交给播放器直接访问，避免 Cloudflare 出口被网盘 CDN 拒绝；不提供重定向的 WebDAV 服务仍由 Worker 流式转发。最后一人离开且房间到期后，这些信息会随房间数据一起删除。
+WebDAV 目录通过标准的 `PROPFIND Depth: 1` 读取。目录内容在 Worker 中排序、分页后返回，WebDAV 密码不会出现在资源列表或房间状态里。用 WebDAV 视频建房时，该房间的 Durable Object 会暂存上游地址和认证头，并通过房间媒体地址处理 `GET`、`HEAD` 与 HTTP Range 请求。对于 AList，Worker 会通过官方 API 生成 `/d/...?...sign=...` 下载地址，再由播放器访问 AList 并获取适用于客户端网络的网盘 CDN 地址；其他对象存储重定向也会在安全校验后交给播放器直接访问。不提供重定向的 WebDAV 服务仍由 Worker 流式转发。最后一人离开且房间到期后，这些信息会随房间数据一起删除。
 
 浏览器会把多个 WebDAV 配置合并加密后写入 `localStorage`，不可导出的 AES-GCM 设备密钥保存在 IndexedDB。发送凭据时，浏览器生成一次性 AES-GCM 密钥加密账号密码，再使用 Worker 公布的 RSA-OAEP 公钥封装该密钥；请求 JSON 只包含 `encryptedKey`、`iv` 和 `ciphertext`。密文通过 AES-GCM Additional Authenticated Data 与对应 WebDAV 地址绑定，不能改配到其他地址重放。RSA 私钥由一个专用 Durable Object 自动生成并持久化，不需要手工配置部署密钥。
 

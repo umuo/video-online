@@ -25,6 +25,17 @@ interface RoomRecord {
 interface WebDavUpstream {
   url: string;
   authorization?: string;
+  alistToken?: string;
+  alistSignedUrl?: string;
+  alistSignedExpiresAt?: number;
+}
+
+interface AListWebDavSource {
+  apiBaseUrl: string;
+  path: string;
+  encodedPath: string;
+  username: string;
+  password: string;
 }
 
 interface WebDavInput {
@@ -179,6 +190,17 @@ function safeMediaRedirect(location: string | null, sourceUrl: string) {
   }
 }
 
+function mediaRedirect(location: string, status = 302) {
+  return new Response(null, {
+    status,
+    headers: {
+      Location: location,
+      "Cache-Control": "private, no-store",
+      "Referrer-Policy": "no-referrer",
+    },
+  });
+}
+
 function isPrivateHostname(hostname: string) {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (
@@ -238,6 +260,110 @@ function basicAuthorization(username: string, password: string) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return `Basic ${btoa(binary)}`;
+}
+
+function basicCredentials(authorization?: string) {
+  if (!authorization) return { username: "", password: "" };
+  const encoded = authorization.match(/^Basic\s+(.+)$/i)?.[1];
+  if (!encoded) return null;
+  try {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const value = new TextDecoder().decode(bytes);
+    const separator = value.indexOf(":");
+    if (separator < 0) return null;
+    return { username: value.slice(0, separator), password: value.slice(separator + 1) };
+  } catch {
+    return null;
+  }
+}
+
+function decodeUrlSegment(segment: string) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function parseAListWebDavSource(source: WebDavUpstream): AListWebDavSource | null {
+  try {
+    const url = new URL(source.url);
+    const encodedSegments = url.pathname.split("/").filter(Boolean);
+    const segments = encodedSegments.map(decodeUrlSegment);
+    const davIndex = segments.findIndex((segment) => segment.toLowerCase() === "dav");
+    if (davIndex < 0 || davIndex === segments.length - 1) return null;
+    const credentials = basicCredentials(source.authorization);
+    if (!credentials) return null;
+    const prefix = segments.slice(0, davIndex);
+    const resource = segments.slice(davIndex + 1);
+    const apiBase = new URL(url.origin);
+    apiBase.pathname = prefix.length
+      ? `/${prefix.map((segment) => encodeURIComponent(segment)).join("/")}/`
+      : "/";
+    return {
+      apiBaseUrl: apiBase.toString(),
+      path: `/${resource.join("/")}`,
+      encodedPath: resource.map((segment) => encodeURIComponent(segment)).join("/"),
+      username: credentials.username,
+      password: credentials.password,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function loginToAList(source: AListWebDavSource) {
+  if (!source.username && !source.password) return "";
+  try {
+    const response = await fetch(new URL("api/auth/login", source.apiBaseUrl), {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ username: source.username, password: source.password }),
+      redirect: "manual",
+    });
+    const body = await response.json().catch(() => null) as {
+      code?: number;
+      data?: { token?: unknown };
+    } | null;
+    return response.ok && body?.code === 200 && typeof body.data?.token === "string"
+      ? body.data.token
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+async function getAListSignedUrl(source: AListWebDavSource, token: string) {
+  try {
+    const headers = new Headers(jsonHeaders);
+    if (token) headers.set("Authorization", token);
+    const response = await fetch(new URL("api/fs/get", source.apiBaseUrl), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path: source.path, password: "" }),
+      redirect: "manual",
+    });
+    const body = await response.json().catch(() => null) as {
+      code?: number;
+      data?: { sign?: unknown };
+    } | null;
+    const sign = response.ok && body?.code === 200 && typeof body.data?.sign === "string"
+      ? body.data.sign
+      : "";
+    if (!sign) return null;
+
+    const direct = new URL(source.apiBaseUrl);
+    direct.pathname = `${direct.pathname.replace(/\/$/, "")}/d/${source.encodedPath}`;
+    direct.searchParams.set("sign", sign);
+    const expires = Number(sign.match(/:(\d+)$/)?.[1]);
+    return {
+      url: direct.toString(),
+      expiresAt: Number.isFinite(expires) && expires > 0 ? expires * 1000 : 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function base64Bytes(value: unknown, maxBytes: number) {
@@ -665,6 +791,7 @@ export class RoomHub implements DurableObject {
   private readonly emptyRoomTtlMs: number;
   private room: RoomRecord | null | undefined;
   private credentialKeyPromise: Promise<{ publicJwk: JsonWebKey; privateKey: CryptoKey }> | null = null;
+  private alistRedirectPromise: Promise<string | null> | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -747,6 +874,42 @@ export class RoomHub implements DurableObject {
     }
   }
 
+  private async resolveAListRedirect(room: RoomRecord) {
+    const upstream = room.webdavSource;
+    if (!upstream) return null;
+    if (
+      upstream.alistSignedUrl
+      && (upstream.alistSignedExpiresAt === 0 || (upstream.alistSignedExpiresAt || 0) > Date.now() + 60_000)
+    ) return upstream.alistSignedUrl;
+    if (this.alistRedirectPromise) return this.alistRedirectPromise;
+
+    const source = parseAListWebDavSource(upstream);
+    if (!source) return null;
+    this.alistRedirectPromise = (async () => {
+      let token = upstream.alistToken || "";
+      let signed = token || (!source.username && !source.password)
+        ? await getAListSignedUrl(source, token)
+        : null;
+      if (!signed && (source.username || source.password)) {
+        token = await loginToAList(source);
+        if (token) signed = await getAListSignedUrl(source, token);
+      }
+      if (!signed) return null;
+      const safeUrl = safeMediaRedirect(signed.url, upstream.url);
+      if (!safeUrl) return null;
+
+      upstream.alistToken = token || undefined;
+      upstream.alistSignedUrl = safeUrl;
+      upstream.alistSignedExpiresAt = signed.expiresAt;
+      this.room = room;
+      await this.state.storage.put("room", room);
+      return safeUrl;
+    })().finally(() => {
+      this.alistRedirectPromise = null;
+    });
+    return this.alistRedirectPromise;
+  }
+
   private authenticatedSockets() {
     return this.state.getWebSockets().filter((socket) => {
       const session = socket.deserializeAttachment() as SessionAttachment | null;
@@ -821,6 +984,8 @@ export class RoomHub implements DurableObject {
 
     if (path === "/media") {
       if (!room.webdavSource) return json({ message: "这个房间没有 WebDAV 媒体" }, 404);
+      const alistRedirect = await this.resolveAListRedirect(room);
+      if (alistRedirect) return mediaRedirect(alistRedirect);
       const headers = new Headers();
       for (const name of ["Range", "If-Range", "If-None-Match", "If-Modified-Since"]) {
         const value = request.headers.get(name);
@@ -840,14 +1005,7 @@ export class RoomHub implements DurableObject {
       if (redirectStatuses.has(upstream.status)) {
         const location = safeMediaRedirect(upstream.headers.get("Location"), room.webdavSource.url);
         if (!location) return json({ message: "WebDAV 返回了不安全或无效的媒体跳转地址" }, 502);
-        return new Response(null, {
-          status: upstream.status,
-          headers: {
-            Location: location,
-            "Cache-Control": "private, no-store",
-            "Referrer-Policy": "no-referrer",
-          },
-        });
+        return mediaRedirect(location, upstream.status);
       }
       const responseHeaders = new Headers(upstream.headers);
       responseHeaders.delete("Set-Cookie");
