@@ -13,7 +13,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "check": "tsc -b && eslint src worker/src vite.config.ts",
     "deploy:worker": "wrangler deploy --config worker/wrangler.jsonc",
-    "deploy:pages": "wrangler pages deploy dist --project-name tongying-room",
+    "deploy:pages": "wrangler pages deploy dist --project-name tongying-room --branch production",
     "deploy": "npm run deploy:worker && npm run build && npm run deploy:pages"
   },
   "dependencies": {
